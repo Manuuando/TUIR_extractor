@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ConversationEntry } from '../types';
 
 interface ChatPanelProps {
@@ -19,6 +19,8 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
   const [error, setError] = useState<string | null>(null);
   const [streamedAnswer, setStreamedAnswer] = useState('');
   const [transcript, setTranscript] = useState<ConversationEntry[]>([]);
+  const [sessionId, setSessionId] = useState(() => selectedEntry?.id ?? randomId());
+  const previousSelectedEntry = useRef<ConversationEntry | null>(selectedEntry);
   const activeEntry = useMemo(() => {
     if (isLoading && question.trim()) {
       return {
@@ -32,7 +34,15 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
   }, [isLoading, question, streamedAnswer, selectedEntry]);
 
   useEffect(() => {
-    if (!selectedEntry) return;
+    if (!selectedEntry) {
+      if (previousSelectedEntry.current) {
+        previousSelectedEntry.current = null;
+        setSessionId(randomId());
+      }
+      return;
+    }
+    previousSelectedEntry.current = selectedEntry;
+    setSessionId(selectedEntry.id);
     setTranscript((previous) => {
       if (previous.some((entry) => entry.id === selectedEntry.id)) {
         return previous;
@@ -54,7 +64,10 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
       const response = await fetch('/api/qa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: trimmed }),
+        body: JSON.stringify({
+          question: trimmed,
+          session_id: sessionId,
+        }),
       });
 
       if (!response.body) {
@@ -76,14 +89,21 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
       }
 
       answer += decoder.decode();
+      const responseSessionId =
+        response.headers.get('X-Conversation-Id') ?? sessionId ?? randomId();
+      setSessionId(responseSessionId);
+
       const entry: ConversationEntry = {
-        id: response.headers.get('X-Conversation-Id') ?? randomId(),
+        id: responseSessionId,
         question: trimmed,
         answer,
         createdAt: new Date().toISOString(),
       };
 
-      setTranscript((previous) => [entry, ...previous]);
+      setTranscript((previous) => [
+        entry,
+        ...previous.filter((existing) => existing.id !== entry.id),
+      ]);
       onNewEntry(entry);
       setQuestion('');
       setStreamedAnswer('');
