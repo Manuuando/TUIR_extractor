@@ -20,6 +20,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 PDF_PATH = DATA_DIR / "tuir.pdf"
 INDEX_PATH = DATA_DIR / "tuir.faiss"
 METADATA_PATH = DATA_DIR / "tuir_metadata.json"
+OUTLINE_PATH = DATA_DIR / "tuir_outline.json"
 
 TUIR_SOURCE_URL = os.getenv(
     "TUIR_SOURCE_URL",
@@ -133,13 +134,43 @@ def build_embeddings(
     return index, metadata
 
 
+def _build_outline(metadata: Sequence[dict]) -> List[dict]:
+    """Generate a lightweight outline structure from metadata entries."""
+
+    outline: List[dict] = []
+    for item in metadata:
+        text = str(item.get("text", ""))
+        first_line = "".join(text.splitlines()[:1]).strip()
+        title = first_line or f"Sezione {item.get('id')}"
+        outline.append(
+            {
+                "id": str(item.get("id")),
+                "title": title,
+                "path": title,
+                "keywords": [],
+                "children": [],
+            }
+        )
+    return outline
+
+
 def persist_index(index: faiss.IndexFlatIP, metadata: Sequence[dict]) -> None:
-    """Persist FAISS index and metadata to disk."""
+    """Persist FAISS index, metadata, and document outline to disk."""
 
     faiss.write_index(index, str(INDEX_PATH))
     with METADATA_PATH.open("w", encoding="utf-8") as meta_file:
         json.dump(list(metadata), meta_file, ensure_ascii=False, indent=2)
-    LOGGER.info("Persisted index to %s and metadata to %s", INDEX_PATH, METADATA_PATH)
+
+    outline = _build_outline(metadata)
+    with OUTLINE_PATH.open("w", encoding="utf-8") as outline_file:
+        json.dump(outline, outline_file, ensure_ascii=False, indent=2)
+
+    LOGGER.info(
+        "Persisted index to %s, metadata to %s, and outline to %s",
+        INDEX_PATH,
+        METADATA_PATH,
+        OUTLINE_PATH,
+    )
 
 
 def ingest_document(force_download: bool = False) -> None:
@@ -167,6 +198,16 @@ def load_index() -> Tuple[faiss.IndexFlatIP, List[dict], SentenceTransformer]:
 
     embedder = load_embedder()
     return index, metadata, embedder
+
+
+def load_outline() -> List[dict]:
+    """Load the precomputed outline for the TUIR document."""
+
+    if not OUTLINE_PATH.exists():
+        raise RuntimeError("Outline not found. Run ingest_document() first.")
+
+    with OUTLINE_PATH.open("r", encoding="utf-8") as outline_file:
+        return json.load(outline_file)
 
 
 if __name__ == "__main__":

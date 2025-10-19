@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Dict, List
@@ -33,7 +34,13 @@ def append_message(session_id: str, role: str, content: str) -> List[Dict[str, s
 
     with _LOCK:
         history = get_history(session_id)
-        history.append({"role": role, "content": content})
+        history.append(
+            {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         path = _history_path(session_id)
         with path.open("w", encoding="utf-8") as history_file:
             json.dump(history, history_file, ensure_ascii=False, indent=2)
@@ -56,3 +63,31 @@ def clear_history(session_id: str) -> None:
         path = _history_path(session_id)
         if path.exists():
             path.unlink()
+
+
+def list_conversations() -> List[Dict[str, str]]:
+    """Return summaries of stored conversations ordered by recency."""
+
+    conversations: List[Dict[str, str]] = []
+    for path in sorted(HISTORY_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        with path.open("r", encoding="utf-8") as history_file:
+            messages = json.load(history_file)
+        if not messages:
+            continue
+
+        last_user = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
+        last_assistant = next((msg for msg in reversed(messages) if msg.get("role") == "assistant"), None)
+        timestamp = messages[-1].get("timestamp")
+        if not timestamp:
+            timestamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+
+        conversations.append(
+            {
+                "id": path.stem,
+                "question": (last_user or {}).get("content", ""),
+                "answer": (last_assistant or {}).get("content", ""),
+                "createdAt": timestamp,
+            }
+        )
+
+    return conversations
