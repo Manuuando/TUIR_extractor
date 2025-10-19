@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ConversationEntry } from '../types';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { ConversationEntry, ConversationMessage } from '../types';
 
 interface ChatPanelProps {
   selectedEntry: ConversationEntry | null;
@@ -17,21 +17,12 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
   const [question, setQuestion] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [streamedAnswer, setStreamedAnswer] = useState('');
-  const [transcript, setTranscript] = useState<ConversationEntry[]>([]);
+  const [messages, setMessages] = useState<ConversationMessage[]>(
+    selectedEntry?.messages ?? []
+  );
   const [sessionId, setSessionId] = useState(() => selectedEntry?.id ?? randomId());
   const previousSelectedEntry = useRef<ConversationEntry | null>(selectedEntry);
-  const activeEntry = useMemo(() => {
-    if (isLoading && question.trim()) {
-      return {
-        id: 'pending',
-        question,
-        answer: streamedAnswer,
-        createdAt: new Date().toISOString(),
-      } satisfies ConversationEntry;
-    }
-    return selectedEntry;
-  }, [isLoading, question, streamedAnswer, selectedEntry]);
+  const assistantMessageIndexRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -39,16 +30,14 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
         previousSelectedEntry.current = null;
         setSessionId(randomId());
       }
+      setMessages([]);
+      assistantMessageIndexRef.current = null;
       return;
     }
     previousSelectedEntry.current = selectedEntry;
     setSessionId(selectedEntry.id);
-    setTranscript((previous) => {
-      if (previous.some((entry) => entry.id === selectedEntry.id)) {
-        return previous;
-      }
-      return [selectedEntry, ...previous];
-    });
+    setMessages(selectedEntry.messages ?? []);
+    assistantMessageIndexRef.current = null;
   }, [selectedEntry]);
 
   const handleSubmit = async (event: FormEvent) => {
@@ -58,9 +47,22 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
 
     setIsLoading(true);
     setError(null);
-    setStreamedAnswer('');
 
     try {
+      const userTimestamp = new Date().toISOString();
+      const assistantTimestamp = new Date().toISOString();
+      let assistantIndex = -1;
+      setMessages((previous) => {
+        const nextMessages = [
+          ...previous,
+          { role: 'user', content: trimmed, timestamp: userTimestamp },
+          { role: 'assistant', content: '', timestamp: assistantTimestamp },
+        ];
+        assistantIndex = nextMessages.length - 1;
+        return nextMessages;
+      });
+      assistantMessageIndexRef.current = assistantIndex;
+
       const response = await fetch('/api/qa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -85,7 +87,16 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
         const { value, done } = await reader.read();
         if (done) break;
         answer += decoder.decode(value, { stream: true });
-        setStreamedAnswer(answer);
+        setMessages((previous) => {
+          if (assistantMessageIndexRef.current === null) {
+            return previous;
+          }
+          return previous.map((message, index) =>
+            index === assistantMessageIndexRef.current
+              ? { ...message, content: answer }
+              : message
+          );
+        });
       }
 
       answer += decoder.decode();
@@ -93,22 +104,45 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
         response.headers.get('X-Conversation-Id') ?? sessionId ?? randomId();
       setSessionId(responseSessionId);
 
+      let finalMessages: ConversationMessage[] = [];
+      setMessages((previous) => {
+        if (assistantMessageIndexRef.current === null) {
+          finalMessages = previous;
+          return previous;
+        }
+        const updated = previous.map((message, index) =>
+          index === assistantMessageIndexRef.current ? { ...message, content: answer } : message
+        );
+        finalMessages = updated;
+        return updated;
+      });
+      assistantMessageIndexRef.current = null;
+
+      const createdAt =
+        finalMessages[finalMessages.length - 1]?.timestamp ?? new Date().toISOString();
+
       const entry: ConversationEntry = {
         id: responseSessionId,
         question: trimmed,
         answer,
-        createdAt: new Date().toISOString(),
+        createdAt,
+        messages: finalMessages,
       };
 
-      setTranscript((previous) => [
-        entry,
-        ...previous.filter((existing) => existing.id !== entry.id),
-      ]);
       onNewEntry(entry);
       setQuestion('');
-      setStreamedAnswer('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to contact backend');
+      if (assistantMessageIndexRef.current !== null) {
+        setMessages((previous) =>
+          previous.map((message, index) =>
+            index === assistantMessageIndexRef.current
+              ? { ...message, content: 'Failed to retrieve answer.' }
+              : message
+          )
+        );
+        assistantMessageIndexRef.current = null;
+      }
     } finally {
       setIsLoading(false);
     }
@@ -132,24 +166,27 @@ const ChatPanel = ({ selectedEntry, onNewEntry }: ChatPanelProps) => {
         </button>
       </form>
       <div className="chat-transcript">
-        {activeEntry && (
+        {messages.length === 0 && (
           <div className="chat-turn">
-            <h4>You asked</h4>
-            <pre>{activeEntry.question}</pre>
-            <h4>Answer</h4>
-            <pre>{isLoading ? streamedAnswer || '…' : activeEntry.answer}</pre>
+            <small>No conversation yet. Ask a question to get started.</small>
           </div>
         )}
-        {transcript
-          .filter((entry) => !activeEntry || entry.id !== activeEntry.id)
-          .map((entry) => (
-            <div key={entry.id} className="chat-turn">
-              <h4>You asked</h4>
-              <pre>{entry.question}</pre>
-              <h4>Answer</h4>
-              <pre>{entry.answer}</pre>
+        {messages.map((message, index) => {
+          const isAssistant = message.role === 'assistant';
+          const isLatestAssistant =
+            isAssistant && isLoading && index === messages.length - 1;
+          const hasContent = message.content.trim().length > 0;
+          const displayContent = hasContent ? message.content : isLatestAssistant ? '…' : message.content;
+          return (
+            <div
+              key={`${message.timestamp ?? 'no-ts'}-${index}`}
+              className={`chat-turn chat-turn-${message.role}`}
+            >
+              <h4>{isAssistant ? 'Assistant' : 'You'}</h4>
+              <pre>{displayContent}</pre>
             </div>
-          ))}
+          );
+        })}
       </div>
     </section>
   );
