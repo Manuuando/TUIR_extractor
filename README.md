@@ -1,150 +1,256 @@
 # TUIR Extractor
 
-This repository now includes a lightweight React front-end to explore the TUIR outline and chat with the QA backend.
+A fully local question-answering stack for the Italian **Testo Unico delle Imposte sui Redditi (TUIR)**. The project downloads the
+official TUIR document, builds a vector index with free embedding models, and serves a FastAPI backend that streams answers from a
+locally hosted transformer. A React front-end lets you explore the document outline and review previous questions.
 
-## Backend API expectations
+> ✅ Everything runs on your machine. No paid or third-party API keys are required once the models and the PDF are cached locally.
 
-The UI assumes the backend exposes the following HTTP endpoints on `http://localhost:8000` (the default target configured for the dev proxy):
+---
 
-- `GET /api/history` &rarr; returns an array of conversation entries with the shape `{ id, question, answer, createdAt }`.
-- `POST /api/qa` &rarr; accepts `{ "question": "..." }` and streams back the answer body while optionally returning the conversation id in the `X-Conversation-Id` header.
-- `GET /api/documents/outline` (or `/api/outline`) &rarr; returns a JSON array describing the TUIR outline.
+## Table of contents
 
-> ℹ️ If your backend serves the outline from a static file instead, place it at `frontend/public/tuir_outline.json` or adjust the endpoints in `DocumentExplorer`.
+1. [Features](#features)
+2. [Architecture overview](#architecture-overview)
+3. [Prerequisites](#prerequisites)
+4. [Step-by-step setup on Windows 11 with VS Code](#step-by-step-setup-on-windows-11-with-vs-code)
+   - [1. Install tooling](#1-install-tooling)
+   - [2. Clone the repository](#2-clone-the-repository)
+   - [3. Create and activate the Python virtual environment](#3-create-and-activate-the-python-virtual-environment)
+   - [4. Install Python dependencies](#4-install-python-dependencies)
+   - [5. Create the environment file](#5-create-the-environment-file)
+   - [6. Download and index the TUIR](#6-download-and-index-the-tuir)
+   - [7. Start the FastAPI backend](#7-start-the-fastapi-backend)
+   - [8. Install front-end dependencies](#8-install-front-end-dependencies)
+   - [9. Launch the React dev server](#9-launch-the-react-dev-server)
+   - [10. Explore the application](#10-explore-the-application)
+5. [Backend API reference](#backend-api-reference)
+6. [Environment variables](#environment-variables)
+7. [Project structure](#project-structure)
+8. [Regenerating data & maintenance tasks](#regenerating-data--maintenance-tasks)
+9. [Troubleshooting tips](#troubleshooting-tips)
 
-## Front-end setup
+---
 
-```bash
-cd frontend
+## Features
+
+- 📄 **Automatic ingestion** – downloads the official TUIR PDF and splits it into article-sized sections.
+- 🔍 **Semantic retrieval** – builds a FAISS index with `sentence-transformers/all-MiniLM-L6-v2` for fast, local similarity search.
+- 🧠 **Local language model** – streams answers using a transformer such as `tiiuae/falcon-7b-instruct` with zero external API calls.
+- 🗂️ **Document explorer** – browse a generated outline of the TUIR from the web interface.
+- 💬 **Conversation history** – each answer is persisted locally and can be revisited from the UI.
+
+## Architecture overview
+
+```
+backend/
+├── app.py          # FastAPI application with retrieval + answer endpoints
+├── ingest.py       # PDF downloader, parser, embedding generation, outline builder
+├── history.py      # JSON-based persistence for chat history
+└── data/           # Generated assets: tuir.pdf, FAISS index, metadata, histories
+frontend/
+├── src/App.tsx     # React entry point combining explorer + chat + history
+└── ...             # Components, styles, and Vite configuration
+```
+
+The front-end communicates with the backend over HTTP. During development, Vite proxies `/api/*` requests to `http://localhost:8000`.
+
+## Prerequisites
+
+Install the following software on Windows 11 before starting:
+
+| Tool | Minimum version | Notes |
+| ---- | ---------------- | ----- |
+| [Python](https://www.python.org/downloads/windows/) | 3.10 | Make sure "Add Python to PATH" is selected during installation. |
+| [Node.js](https://nodejs.org/en/download/prebuilt-installer) | 18 LTS or newer | Includes `npm`. |
+| [Git](https://git-scm.com/download/win) | Latest | Required for cloning the repository. |
+| [Visual Studio Code](https://code.visualstudio.com/) | Latest | Optional but recommended for development. |
+| [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) | — | Needed if `pip` compiles wheels (FAISS, torch). |
+
+> 💡 **GPU acceleration** is optional. If you have a CUDA-capable GPU, install the matching GPU build of PyTorch following the
+> [official instructions](https://pytorch.org/get-started/locally/).
+
+## Step-by-step setup on Windows 11 with VS Code
+
+All commands below assume you are using **PowerShell**. If script execution is restricted, enable it once:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+```
+
+### 1. Install tooling
+
+Install Python, Node.js, Git, and VS Code using the links above. After installation, restart PowerShell and verify the versions:
+
+```powershell
+python --version
+npm --version
+git --version
+code --version
+```
+
+### 2. Clone the repository
+
+Open VS Code, press **Ctrl+Shift+P**, run **Git: Clone**, and enter the repository URL. Alternatively, use PowerShell:
+
+```powershell
+cd $HOME\source
+git clone https://github.com/<your-account>/TUIR_extractor.git
+cd TUIR_extractor
+```
+
+### 3. Create and activate the Python virtual environment
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+The prompt should now show `(.venv)` indicating the environment is active. VS Code usually picks it up automatically (check the
+status bar in the bottom-right corner).
+
+### 4. Install Python dependencies
+
+Inside the activated environment, install the backend requirements:
+
+```powershell
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+> ⏱️ The first installation can take a while because `torch`, `transformers`, and `sentence-transformers` download sizeable wheels.
+
+### 5. Create the environment file
+
+1. Copy the sample file:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+2. Open `.env` in VS Code and adjust values if needed. Default values already point to public resources and safe defaults:
+
+   ```env
+   TUIR_SOURCE_URL=https://www1.finanze.gov.it/upload/tuir.pdf
+   TUIR_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+   TUIR_LLM_MODEL=tiiuae/falcon-7b-instruct
+   TUIR_LOCAL_ONLY=1
+   TUIR_MAX_NEW_TOKENS=512
+   TUIR_TEMPERATURE=0.2
+   ```
+
+   Keeping `TUIR_LOCAL_ONLY=1` guarantees the backend uses only locally cached models.
+
+### 6. Download and index the TUIR
+
+Run the ingestion pipeline once to download the PDF, extract its text, compute embeddings, and generate the outline:
+
+```powershell
+python -m backend.ingest
+```
+
+You should see logs indicating the download, extraction, and FAISS index creation. Generated assets appear under `backend/data/`:
+
+- `tuir.pdf`
+- `tuir.faiss`
+- `tuir_metadata.json`
+- `tuir_outline.json`
+
+### 7. Start the FastAPI backend
+
+With the virtual environment still active:
+
+```powershell
+uvicorn backend.app:app --reload --port 8000
+```
+
+The API exposes streaming answers and serves history/outline endpoints. Leave this terminal open while the server runs.
+
+### 8. Install front-end dependencies
+
+Open a **new** PowerShell window, navigate to the project, and install the Node packages:
+
+```powershell
+cd $HOME\source\TUIR_extractor\frontend
 npm install
 ```
 
-### Available scripts
+### 9. Launch the React dev server
 
-- `npm run dev` – start the Vite development server (defaults to port `5173`). Requests to `/api/*` are proxied to `http://localhost:8000`.
-- `npm run build` – generate a production build under `frontend/dist`.
-- `npm run preview` – serve the production build locally after running `npm run build`.
+```powershell
+npm run dev
+```
 
-### Running alongside the backend
+Vite starts on <http://localhost:5173>. API calls to `/api/*` are proxied to the FastAPI server on port `8000`.
 
-1. Start the backend in a separate terminal (for example with `uvicorn app.main:app --reload --port 8000`, or the command appropriate for your project).
-2. From another terminal launch the front-end development server:
+### 10. Explore the application
 
-   ```bash
-   cd frontend
-   npm run dev
-   ```
+1. Open <http://localhost:5173> in your browser.
+2. Use the **Document Explorer** to browse the automatically generated TUIR outline.
+3. Ask questions in the **Chat Panel**. Answers stream in real time, and a new conversation entry appears in the history sidebar.
 
-3. Open http://localhost:5173 in your browser. The dev server will proxy API requests to the backend on port 8000 so both services work together during development.
+> 📝 Each prompt/answer pair is stored under `backend/data/history/`. Removing a file clears that conversation from the history list.
 
-## Building for production
+## Backend API reference
 
-Run `npm run build` to emit the static assets into `frontend/dist`. You can then serve that directory from your preferred web server or integrate it with the backend.
-This project provides a self-hosted question-answering service over the Italian *Testo Unico delle Imposte sui Redditi* (TUIR). It downloads the official TUIR PDF, builds a local vector index using free embedding models, and serves a FastAPI endpoint that streams answers from a locally hosted transformer model.
+| Method & Path | Description |
+| ------------- | ----------- |
+| `GET /api/health` | Service heartbeat (also available at `/health`). |
+| `POST /query` | Retrieve the top matching sections for a question (JSON body `{ "question": "...", "top_k": 5 }`). |
+| `POST /api/qa` | Stream an answer. Accepts `{ "question": "...", "session_id": "optional", "top_k": 5, "max_new_tokens": 512, "temperature": 0.2 }`. Returns plain-text tokens and sets `X-Conversation-Id`. |
+| `POST /answer` | Legacy alias of `/api/qa`. |
+| `GET /api/history` | List stored conversations: `[{ id, question, answer, createdAt }]`. |
+| `GET /api/history/{session_id}` | Retrieve the detailed message log for one conversation. |
+| `DELETE /api/history/{session_id}` | Remove a stored conversation. |
+| `GET /api/outline` | Download the generated document outline (also under `/api/documents/outline`). |
 
-> **Note**
-> All components rely on free, locally cached models and libraries. No external proprietary services are required once the document and models have been downloaded.
+## Environment variables
+
+Environment variables can be set in the `.env` file at the project root. They are loaded automatically when the backend starts.
+
+| Variable | Description | Default |
+| -------- | ----------- | ------- |
+| `TUIR_SOURCE_URL` | Public URL for the TUIR PDF. | `https://www1.finanze.gov.it/upload/tuir.pdf` |
+| `TUIR_EMBEDDING_MODEL` | Sentence-transformer used for vector embeddings. | `sentence-transformers/all-MiniLM-L6-v2` |
+| `TUIR_LLM_MODEL` | Hugging Face model name or local path for answer generation. | `tiiuae/falcon-7b-instruct` |
+| `TUIR_LOCAL_ONLY` | When `1`, forces Hugging Face loaders to use cached/local files only. | `1` |
+| `TUIR_MAX_NEW_TOKENS` | Default maximum tokens generated per answer. | `512` |
+| `TUIR_TEMPERATURE` | Sampling temperature for generation (`0` disables randomness). | `0.2` |
+
+Override them by editing `.env` or by exporting environment variables before starting the backend.
 
 ## Project structure
 
 ```
-backend/
-├── app.py          # FastAPI application exposing query and answer endpoints
-├── data/           # Persistent assets (downloaded PDF, FAISS index, histories)
-├── history.py      # Utilities for storing per-session conversation logs
-├── ingest.py       # Document downloader, parser, and vector index builder
-└── __init__.py
-requirements.txt    # Python dependencies
+TUIR_extractor/
+├── backend/
+│   ├── app.py
+│   ├── data/
+│   ├── history.py
+│   └── ingest.py
+├── frontend/
+│   ├── src/
+│   └── vite.config.ts
+├── requirements.txt
+├── package.json (front-end inside ./frontend)
+├── .env.example
+└── README.md
 ```
 
-## Prerequisites
+## Regenerating data & maintenance tasks
 
-- Python 3.10 or later
-- A virtual environment (recommended)
-- Sufficient local storage for the TUIR PDF, FAISS index, and model weights
-- GPU support is optional but recommended for running large language models such as `tiiuae/falcon-7b-instruct`
+- **Rebuild the FAISS index / outline**: delete `backend/data/tuir.faiss`, `backend/data/tuir_metadata.json`, and `backend/data/tuir_outline.json`, then rerun `python -m backend.ingest`.
+- **Force a PDF redownload**: run `python -m backend.ingest --force` by editing the script or set `TUIR_SOURCE_URL` to a new mirror and delete the existing `tuir.pdf`.
+- **Clear chat history**: remove JSON files under `backend/data/history/` or call `DELETE /api/history/{session_id}`.
+- **Production front-end build**: from `frontend/`, execute `npm run build` and serve the `frontend/dist` directory (e.g., with `npm run preview`).
+- **Run the backend without auto-reload**: `uvicorn backend.app:app --host 0.0.0.0 --port 8000`.
 
-## Installation
+## Troubleshooting tips
 
-1. Create and activate a virtual environment.
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   ```
-2. Install the required Python packages.
-   ```bash
-   pip install -r requirements.txt
-   ```
+- **Missing build tools**: If `pip install` fails while compiling native extensions, install the *Microsoft C++ Build Tools* and rerun the installation.
+- **Large model downloads**: Some transformer models are several GB. Download them beforehand with `huggingface-cli download` if you plan to work offline.
+- **CUDA errors**: Ensure the CUDA toolkit version matches the PyTorch build you installed. Alternatively, use the CPU wheel by reinstalling PyTorch without CUDA.
+- **Port conflicts**: If port `8000` or `5173` is in use, adjust them via `uvicorn --port <new>` and `npm run dev -- --port <new>` and update the proxy in `frontend/vite.config.ts` accordingly.
+- **Slow ingestion**: PDF parsing can take several minutes. The log output provides progress; reruns are fast once the assets are cached.
 
-## Downloading and indexing the TUIR
-
-The ingestion pipeline automatically downloads the official TUIR PDF (default URL: `https://www1.finanze.gov.it/upload/tuir.pdf`), extracts its contents, splits the text into articles, and builds a FAISS index with embeddings from `sentence-transformers/all-MiniLM-L6-v2`.
-
-Run the ingestion step once before starting the API:
-
-```bash
-python -m backend.ingest
-```
-
-This generates the following assets under `backend/data/`:
-
-- `tuir.pdf` – the downloaded source document
-- `tuir.faiss` – FAISS index storing the section embeddings
-- `tuir_metadata.json` – text and identifiers for each section
-- `history/` – JSON conversation logs per session (created on demand)
-
-To force a redownload of the PDF, set the environment variable `TUIR_SOURCE_URL` or run the ingestion with `force_download=True` inside Python.
-
-## Running the FastAPI server
-
-After the index has been built, start the API with Uvicorn:
-
-```bash
-uvicorn backend.app:app --reload
-```
-
-Key endpoints:
-
-- `GET /health` – simple service health check
-- `POST /query` – retrieve the top `k` relevant TUIR sections for a question
-- `POST /answer` – stream an answer generated by the local language model
-- `GET /history/{session_id}` – fetch prior exchanges for a conversation
-- `DELETE /history/{session_id}` – clear a session's stored conversation
-
-The `/answer` endpoint streams plain-text tokens as they are produced. It automatically logs both the user prompt and the assistant's response to `backend/data/history/{session_id}.json`.
-
-## Configurable environment variables
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `TUIR_SOURCE_URL` | URL used to download the TUIR PDF. | `https://www1.finanze.gov.it/upload/tuir.pdf` |
-| `TUIR_EMBEDDING_MODEL` | Sentence-transformers model for embeddings. | `sentence-transformers/all-MiniLM-L6-v2` |
-| `TUIR_LLM_MODEL` | Hugging Face model name or path for answer generation. | `tiiuae/falcon-7b-instruct` |
-| `TUIR_LOCAL_ONLY` | When set to `1`, the app loads models from the local cache only. | `1` |
-| `TUIR_MAX_NEW_TOKENS` | Default maximum tokens generated per answer. | `512` |
-| `TUIR_TEMPERATURE` | Default sampling temperature for generation. | `0.2` |
-
-All models are loaded locally via the Hugging Face `transformers` library. Ensure the necessary weights are present in your Hugging Face cache or located at a local path before launching the API.
-
-## Conversation history
-
-Session histories are persisted as JSON arrays that follow the structure:
-
-```json
-[
-  {"role": "user", "content": "..."},
-  {"role": "assistant", "content": "..."}
-]
-```
-
-This makes it straightforward for a front-end application to retrieve and display prior turns in a chat interface.
-
-## Development tips
-
-- To rebuild the FAISS index after modifying the ingestion heuristics, delete `backend/data/tuir.faiss` and `backend/data/tuir_metadata.json`, then rerun `python -m backend.ingest`.
-- The downloader respects the `TUIR_SOURCE_URL` environment variable, allowing mirrors or offline copies to be used when necessary.
-- If you are operating in an entirely offline environment, download the TUIR PDF and required model weights beforehand and place them in the expected cache directories.
-
-## License
-
-This repository provides tooling around the public TUIR document. Verify the licensing terms of the TUIR content and the models you download before deploying in production environments.
+Happy hacking! 🛠️

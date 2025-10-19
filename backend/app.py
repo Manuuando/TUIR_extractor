@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from threading import Lock, Thread
 from typing import Dict, Iterable, List, Optional
 
@@ -20,6 +21,7 @@ from .ingest import (
     ensure_document,
     ingest_document,
     load_index,
+    load_outline,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -59,7 +61,9 @@ class QueryResponse(BaseModel):
 
 
 class AnswerRequest(QueryRequest):
-    session_id: str = Field(..., description="Conversation session identifier")
+    session_id: Optional[str] = Field(
+        None, description="Conversation session identifier"
+    )
     max_new_tokens: int = Field(DEFAULT_MAX_NEW_TOKENS, ge=32, le=2048)
     temperature: float = Field(DEFAULT_TEMPERATURE, ge=0.0, le=1.0)
 
@@ -67,6 +71,13 @@ class AnswerRequest(QueryRequest):
 class HistoryResponse(BaseModel):
     session_id: str
     messages: List[Dict[str, str]]
+
+
+class ConversationSummary(BaseModel):
+    id: str
+    question: str
+    answer: str
+    createdAt: str
 
 
 def _lazy_load_index() -> None:
@@ -185,6 +196,7 @@ def _startup_event() -> None:  # pragma: no cover - FastAPI startup
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
 
@@ -199,20 +211,38 @@ def query(request: QueryRequest) -> QueryResponse:
     return QueryResponse(question=request.question, sections=sections)
 
 
+@app.get("/api/history", response_model=List[ConversationSummary])
+def list_history_endpoint() -> List[ConversationSummary]:
+    """Return summaries for all stored conversations."""
+
+    return [ConversationSummary(**entry) for entry in history.list_conversations()]
+
+
 @app.get("/history/{session_id}", response_model=HistoryResponse)
+@app.get("/api/history/{session_id}", response_model=HistoryResponse)
 def get_history_endpoint(session_id: str) -> HistoryResponse:
     messages = history.get_history(session_id)
     return HistoryResponse(session_id=session_id, messages=messages)
 
 
 @app.delete("/history/{session_id}")
+@app.delete("/api/history/{session_id}")
 def clear_history_endpoint(session_id: str) -> JSONResponse:
     history.clear_history(session_id)
     return JSONResponse({"status": "cleared", "session_id": session_id})
 
 
-@app.post("/answer")
-def answer(request: AnswerRequest):
+@app.get("/api/outline")
+@app.get("/api/documents/outline")
+def outline_endpoint() -> JSONResponse:
+    try:
+        outline = load_outline()
+    except RuntimeError as exc:  # pragma: no cover - runtime error propagation
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse(outline)
+
+
+def _run_answer(request: AnswerRequest, *, session_id: str):
     try:
         sections = _retrieve_sections(request.question, request.top_k)
     except Exception as exc:  # pragma: no cover
@@ -224,8 +254,8 @@ def answer(request: AnswerRequest):
     except RuntimeError as exc:  # pragma: no cover - surface configuration errors
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    history.append_message(request.session_id, "user", request.question)
-    prior_messages = history.get_history(request.session_id)[:-1]
+    history.append_message(session_id, "user", request.question)
+    prior_messages = history.get_history(session_id)[:-1]
     prompt = _format_prompt(request.question, sections, prior_messages)
 
     def response_generator():
@@ -240,6 +270,31 @@ def answer(request: AnswerRequest):
                 yield token
         finally:
             final_answer = "".join(answer_text_parts).strip()
-            history.append_message(request.session_id, "assistant", final_answer)
+            history.append_message(session_id, "assistant", final_answer)
 
-    return StreamingResponse(response_generator(), media_type="text/plain")
+    response = StreamingResponse(response_generator(), media_type="text/plain")
+    response.headers["X-Conversation-Id"] = session_id
+    return response
+
+
+@app.post("/answer")
+def answer(request: AnswerRequest):
+    session_id = request.session_id
+    if not session_id:
+        session_id = uuid.uuid4().hex
+    return _run_answer(request, session_id=session_id)
+
+
+class QARequest(BaseModel):
+    question: str = Field(..., description="Question posed by the user")
+    session_id: Optional[str] = Field(None, description="Existing conversation identifier")
+    top_k: int = Field(DEFAULT_TOP_K, ge=1, le=20)
+    max_new_tokens: int = Field(DEFAULT_MAX_NEW_TOKENS, ge=32, le=2048)
+    temperature: float = Field(DEFAULT_TEMPERATURE, ge=0.0, le=1.0)
+
+
+@app.post("/api/qa")
+def qa_endpoint(request: QARequest):
+    answer_request = AnswerRequest(**request.dict())
+    session_id = request.session_id or uuid.uuid4().hex
+    return _run_answer(answer_request, session_id=session_id)
