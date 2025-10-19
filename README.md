@@ -27,8 +27,9 @@ locally hosted transformer. A React front-end lets you explore the document outl
 5. [Backend API reference](#backend-api-reference)
 6. [Environment variables](#environment-variables)
 7. [Project structure](#project-structure)
-8. [Regenerating data & maintenance tasks](#regenerating-data--maintenance-tasks)
-9. [Troubleshooting tips](#troubleshooting-tips)
+8. [Running tests](#running-tests)
+9. [Regenerating data & maintenance tasks](#regenerating-data--maintenance-tasks)
+10. [Troubleshooting tips](#troubleshooting-tips)
 
 ---
 
@@ -190,6 +191,16 @@ Vite starts on <http://localhost:5173>. API calls to `/api/*` are proxied to the
 3. Ask questions in the **Chat Panel**. Answers stream in real time, and a new conversation entry appears in the history sidebar.
 
 > 📝 Each prompt/answer pair is stored under `backend/data/history/`. Removing a file clears that conversation from the history list.
+
+## Running tests
+
+The backend includes a small automated suite powered by **pytest**. After installing the Python dependencies and activating your virtual environment, run the tests from the project root:
+
+```powershell
+pytest
+```
+
+The configuration lives in `pyproject.toml`, so no additional flags are required. Use `python -m pytest` if your shell does not expose the `pytest` entry point.
 
 ## Backend API reference
 
