@@ -1,0 +1,6 @@
+__pycache__/
+.venv/
+backend/data/tuir.pdf
+backend/data/*.faiss
+backend/data/*metadata.json
+backend/data/history/

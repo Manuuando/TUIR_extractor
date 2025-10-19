@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+requests
+pdfplumber
+sentence-transformers
+faiss-cpu
+transformers
+torch
