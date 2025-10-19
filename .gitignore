@@ -2,3 +2,9 @@ frontend/node_modules
 frontend/dist
 .vscode
 .DS_Store
+__pycache__/
+.venv/
+backend/data/tuir.pdf
+backend/data/*.faiss
+backend/data/*metadata.json
+backend/data/history/
