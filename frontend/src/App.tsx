@@ -16,6 +16,7 @@ const App = () => {
         selectedEntryId={selectedEntry?.id ?? null}
         onHistoryLoaded={setHistory}
         onSelectEntry={setSelectedEntry}
+        onStartNewConversation={() => setSelectedEntry(null)}
       />
       <main className="main-content">
         <DocumentExplorer />

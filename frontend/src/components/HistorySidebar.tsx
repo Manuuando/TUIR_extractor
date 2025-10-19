@@ -5,7 +5,8 @@ interface HistorySidebarProps {
   history: ConversationEntry[];
   selectedEntryId: string | null;
   onHistoryLoaded: (history: ConversationEntry[]) => void;
-  onSelectEntry: (entry: ConversationEntry) => void;
+  onSelectEntry?: (entry: ConversationEntry) => void;
+  onStartNewConversation: () => void;
 }
 
 const HistorySidebar = ({
@@ -13,6 +14,7 @@ const HistorySidebar = ({
   selectedEntryId,
   onHistoryLoaded,
   onSelectEntry,
+  onStartNewConversation,
 }: HistorySidebarProps) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,8 +68,11 @@ const HistorySidebar = ({
     if (activeId && history.some((entry) => entry.id === activeId)) {
       return;
     }
+    if (selectedEntryId === null) {
+      return;
+    }
     setActiveId(history[0].id);
-  }, [history, activeId]);
+  }, [history, activeId, selectedEntryId]);
 
   const handleSelect = async (entry: ConversationEntry) => {
     setActiveId(entry.id);
@@ -78,7 +83,7 @@ const HistorySidebar = ({
         throw new Error(`Backend responded with ${response.status}`);
       }
       const payload: HistoryResponse = await response.json();
-      onSelectEntry({
+      onSelectEntry?.({
         ...entry,
         id: payload.session_id,
         messages: payload.messages,
@@ -95,6 +100,15 @@ const HistorySidebar = ({
     <aside className="sidebar">
       <header>
         <h2>History</h2>
+        <button
+          type="button"
+          onClick={() => {
+            setActiveId(null);
+            onStartNewConversation();
+          }}
+        >
+          Nuova conversazione
+        </button>
         {(loading || selectingId) && <small>Loading…</small>}
         {error && <small style={{ color: '#f87171' }}>{error}</small>}
       </header>
