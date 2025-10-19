@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ConversationEntry } from '../types';
+import { ConversationEntry, HistoryResponse } from '../types';
 
 interface HistorySidebarProps {
   history: ConversationEntry[];
@@ -17,6 +17,7 @@ const HistorySidebar = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [selectingId, setSelectingId] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -68,11 +69,33 @@ const HistorySidebar = ({
     setActiveId(history[0].id);
   }, [history, activeId]);
 
+  const handleSelect = async (entry: ConversationEntry) => {
+    setActiveId(entry.id);
+    setSelectingId(entry.id);
+    try {
+      const response = await fetch(`/api/history/${entry.id}`);
+      if (!response.ok) {
+        throw new Error(`Backend responded with ${response.status}`);
+      }
+      const payload: HistoryResponse = await response.json();
+      onSelectEntry({
+        ...entry,
+        id: payload.session_id,
+        messages: payload.messages,
+      });
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load conversation');
+    } finally {
+      setSelectingId((current) => (current === entry.id ? null : current));
+    }
+  };
+
   return (
     <aside className="sidebar">
       <header>
         <h2>History</h2>
-        {loading && <small>Loading…</small>}
+        {(loading || selectingId) && <small>Loading…</small>}
         {error && <small style={{ color: '#f87171' }}>{error}</small>}
       </header>
       <ul>
@@ -80,10 +103,7 @@ const HistorySidebar = ({
           <li
             key={entry.id}
             className={entry.id === activeId ? 'active' : ''}
-            onClick={() => {
-              setActiveId(entry.id);
-              onSelectEntry(entry);
-            }}
+            onClick={() => handleSelect(entry)}
           >
             <strong>{entry.question}</strong>
             <small>{new Date(entry.createdAt).toLocaleString()}</small>

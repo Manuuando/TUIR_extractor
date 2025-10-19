@@ -16,15 +16,16 @@ const matchesQuery = (section: OutlineSection, query: string) => {
 
 const filterSections = (sections: OutlineSection[], query: string): OutlineSection[] => {
   if (!query) return sections;
-  return sections
-    .map((section) => {
-      const children = section.children ? filterSections(section.children, query) : [];
-      if (matchesQuery(section, query) || children.length > 0) {
-        return { ...section, children };
-      }
-      return null;
-    })
-    .filter((section): section is OutlineSection => Boolean(section));
+  return sections.reduce<OutlineSection[]>((accumulator, section) => {
+    const children = section.children ? filterSections(section.children, query) : [];
+    if (matchesQuery(section, query) || children.length > 0) {
+      accumulator.push({
+        ...section,
+        children: children.length > 0 ? children : undefined,
+      });
+    }
+    return accumulator;
+  }, []);
 };
 
 const SectionNode = ({ section }: { section: OutlineSection }) => {
