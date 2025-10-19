@@ -132,7 +132,7 @@ pip install -r requirements.txt
 2. Open `.env` in VS Code and adjust values if needed. Default values already point to public resources and safe defaults:
 
    ```env
-   TUIR_SOURCE_URL=https://www1.finanze.gov.it/upload/tuir.pdf
+   TUIR_SOURCE_URL="https://www.finanze.gov.it/export/sites/finanze/.content/Documenti/Varie/TUIR_aggiornato_2024.pdf,https://www.finanze.gov.it/export/sites/finanze/.content/Documenti/Varie/TUIR.pdf"
    TUIR_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
    TUIR_LLM_MODEL=tiiuae/falcon-7b-instruct
    TUIR_LOCAL_ONLY=1
@@ -221,7 +221,7 @@ Environment variables can be set in the `.env` file at the project root. They ar
 
 | Variable | Description | Default |
 | -------- | ----------- | ------- |
-| `TUIR_SOURCE_URL` | Public URL for the TUIR PDF. | `https://www1.finanze.gov.it/upload/tuir.pdf` |
+| `TUIR_SOURCE_URL` | Comma-separated list of fallback URLs for the TUIR PDF. | `https://www.finanze.gov.it/export/sites/finanze/.content/Documenti/Varie/TUIR_aggiornato_2024.pdf,https://www.finanze.gov.it/export/sites/finanze/.content/Documenti/Varie/TUIR.pdf` |
 | `TUIR_EMBEDDING_MODEL` | Sentence-transformer used for vector embeddings. | `sentence-transformers/all-MiniLM-L6-v2` |
 | `TUIR_LLM_MODEL` | Hugging Face model name or local path for answer generation. | `tiiuae/falcon-7b-instruct` |
 | `TUIR_LOCAL_ONLY` | When `1`, forces Hugging Face loaders to use cached/local files only. | `1` |

@@ -22,42 +22,98 @@ INDEX_PATH = DATA_DIR / "tuir.faiss"
 METADATA_PATH = DATA_DIR / "tuir_metadata.json"
 OUTLINE_PATH = DATA_DIR / "tuir_outline.json"
 
-TUIR_SOURCE_URL = os.getenv(
-    "TUIR_SOURCE_URL",
+DEFAULT_TUIR_SOURCE_URLS: Tuple[str, ...] = (
+    "https://www.finanze.gov.it/export/sites/finanze/.content/Documenti/Varie/TUIR_aggiornato_2024.pdf",
+    "https://www.finanze.gov.it/export/sites/finanze/.content/Documenti/Varie/TUIR.pdf",
     "https://www1.finanze.gov.it/upload/tuir.pdf",
 )
+
+
+def _normalize_source_urls(urls: str | Sequence[str] | None) -> List[str]:
+    """Return a list of candidate URLs to download the TUIR document from."""
+
+    if urls is None:
+        env_value = os.getenv("TUIR_SOURCE_URL", "")
+        if env_value:
+            env_urls = [candidate.strip() for candidate in env_value.split(",")]
+            return [candidate for candidate in env_urls if candidate]
+        return list(DEFAULT_TUIR_SOURCE_URLS)
+
+    if isinstance(urls, str):
+        return [urls]
+
+    return [candidate for candidate in urls if candidate]
 
 EMBEDDING_MODEL_NAME = os.getenv(
     "TUIR_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
 )
 
 
-def ensure_document(url: str = TUIR_SOURCE_URL, *, force: bool = False) -> Path:
+def ensure_document(
+    url: str | Sequence[str] | None = None,
+    *,
+    force: bool = False,
+) -> Path:
     """Ensure the TUIR PDF is available locally.
 
     Args:
-        url: Public URL where the TUIR PDF can be downloaded.
+        url: One or multiple candidate URLs for downloading the TUIR PDF. When ``None``
+            the function will look at the ``TUIR_SOURCE_URL`` environment variable. It
+            accepts either a single URL or a comma separated list. If the environment
+            variable is not provided, a set of baked-in defaults is used.
         force: If ``True`` forces a re-download of the document even if it already exists.
 
     Returns:
         Path to the local PDF file.
     """
 
+    source_urls = _normalize_source_urls(url)
+    if not source_urls:
+        raise ValueError("No candidate URLs provided to download the TUIR document.")
+
     if PDF_PATH.exists() and not force:
         LOGGER.debug("TUIR PDF already present at %s", PDF_PATH)
         return PDF_PATH
 
-    LOGGER.info("Downloading TUIR document from %s", url)
-    response = requests.get(url, stream=True, timeout=120)
-    response.raise_for_status()
+    errors: List[str] = []
+    tmp_path = PDF_PATH.with_suffix(PDF_PATH.suffix + ".download")
 
-    with PDF_PATH.open("wb") as pdf_file:
-        for chunk in response.iter_content(chunk_size=1 << 20):
-            if chunk:
-                pdf_file.write(chunk)
+    for candidate_url in source_urls:
+        LOGGER.info("Downloading TUIR document from %s", candidate_url)
+        response = None
+        try:
+            response = requests.get(candidate_url, stream=True, timeout=120)
+            response.raise_for_status()
 
-    LOGGER.info("Saved TUIR PDF to %s", PDF_PATH)
-    return PDF_PATH
+            with tmp_path.open("wb") as pdf_file:
+                for chunk in response.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        pdf_file.write(chunk)
+
+            tmp_path.replace(PDF_PATH)
+            LOGGER.info("Saved TUIR PDF to %s", PDF_PATH)
+            return PDF_PATH
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            errors.append(f"{candidate_url} -> HTTP {status}")
+            LOGGER.warning("Failed to download TUIR from %s: %s", candidate_url, exc)
+        except requests.RequestException as exc:
+            errors.append(f"{candidate_url} -> {exc.__class__.__name__}: {exc}")
+            LOGGER.warning("Error downloading TUIR from %s: %s", candidate_url, exc)
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+    error_message = ", ".join(errors) or "Unknown error"
+    raise RuntimeError(
+        "Unable to download the TUIR PDF. Tried the following sources: "
+        f"{', '.join(source_urls)}. Last errors: {error_message}"
+    )
 
 
 def extract_text_from_pdf(pdf_path: Path) -> str:

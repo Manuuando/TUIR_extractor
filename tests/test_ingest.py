@@ -1,6 +1,37 @@
 import numpy as np
+import pytest
 
-from backend.ingest import _build_outline, build_embeddings, split_into_sections
+from backend.ingest import (
+    DEFAULT_TUIR_SOURCE_URLS,
+    _build_outline,
+    _normalize_source_urls,
+    build_embeddings,
+    ensure_document,
+    split_into_sections,
+)
+
+
+def test_normalize_source_urls_defaults(monkeypatch):
+    monkeypatch.delenv("TUIR_SOURCE_URL", raising=False)
+
+    urls = _normalize_source_urls(None)
+
+    assert urls == list(DEFAULT_TUIR_SOURCE_URLS)
+
+
+def test_normalize_source_urls_from_env(monkeypatch):
+    monkeypatch.setenv("TUIR_SOURCE_URL", "https://example.com/a.pdf, https://example.com/b.pdf")
+
+    urls = _normalize_source_urls(None)
+
+    assert urls == ["https://example.com/a.pdf", "https://example.com/b.pdf"]
+
+
+def test_ensure_document_requires_urls(monkeypatch, tmp_path):
+    monkeypatch.setattr("backend.ingest.PDF_PATH", tmp_path / "tuir.pdf")
+
+    with pytest.raises(ValueError):
+        ensure_document([], force=True)
 
 
 def test_split_into_sections_with_articles():
